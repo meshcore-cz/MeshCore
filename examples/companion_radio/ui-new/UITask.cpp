@@ -89,6 +89,9 @@ class HomeScreen : public UIScreen {
     RECENT,
     RADIO,
     BLUETOOTH,
+#ifdef WITH_BLEEDGE_BRIDGE
+    BLEEDGE,
+#endif
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
     GPS,
@@ -140,11 +143,30 @@ class HomeScreen : public UIScreen {
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
     display.fillRect(iconX + 2, iconY + 2, fillWidth, iconHeight - 4);
 
+#ifdef WITH_BLEEDGE_BRIDGE
+    BLEEdgeBridgeStatus bleedge_status;
+    the_mesh.getBLEEdgeStatus(bleedge_status);
+    if (bleedge_status.running) {
+      display.setColor(bleedge_status.connected ? DisplayDriver::GREEN : DisplayDriver::YELLOW);
+      display.setTextSize(1);
+      const char* ble = "ble";
+      int bleX = iconX - display.getTextWidth(ble) - 3;
+      if (bleX > 0) {
+        display.setCursor(bleX, iconY + 1);
+        display.print(ble);
+      }
+    }
+#endif
+
     // show muted icon if buzzer is muted
 #ifdef PIN_BUZZER
     if (_task->isBuzzerQuiet()) {
       display.setColor(DisplayDriver::RED);
-      display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
+      int mutedX = iconX - 9;
+#ifdef WITH_BLEEDGE_BRIDGE
+      mutedX -= 21;
+#endif
+      display.drawXbm(mutedX, iconY + 1, muted_icon, 8, 8);
     }
 #endif
   }
@@ -285,6 +307,41 @@ public:
           32, 32);
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+#ifdef WITH_BLEEDGE_BRIDGE
+    } else if (_page == HomePage::BLEEDGE) {
+      BLEEdgeBridgeStatus status;
+      the_mesh.getBLEEdgeStatus(status);
+
+      display.setTextSize(1);
+      display.setColor(status.running ? DisplayDriver::GREEN : DisplayDriver::RED);
+      display.setCursor(0, 20);
+      display.print("BLEEdge");
+      const char* link_status = status.connected ? "conn" : (status.scanning ? "scan" : "idle");
+      display.setCursor(display.width() - display.getTextWidth(link_status) - 1, 20);
+      display.print(link_status);
+
+      display.setColor(DisplayDriver::YELLOW);
+      display.setCursor(0, 31);
+      sprintf(tmp, "mesh tx:%lu rx:%lu", (unsigned long)status.txPackets, (unsigned long)status.rxPackets);
+      display.print(tmp);
+
+      display.setCursor(0, 42);
+      sprintf(tmp, "dg tx:%lu rx:%lu", (unsigned long)status.txDatagrams, (unsigned long)status.rxDatagrams);
+      display.print(tmp);
+
+      display.setCursor(0, 53);
+      if (status.lastRxMs != 0) {
+        sprintf(tmp, "fwd:%lu rx:%lus", (unsigned long)status.forwardedDatagrams,
+                (unsigned long)((millis() - status.lastRxMs) / 1000));
+      } else if (status.lastTxMs != 0) {
+        sprintf(tmp, "fwd:%lu tx:%lus", (unsigned long)status.forwardedDatagrams,
+                (unsigned long)((millis() - status.lastTxMs) / 1000));
+      } else {
+        sprintf(tmp, "fwd:%lu ann:%lu", (unsigned long)status.forwardedDatagrams,
+                (unsigned long)status.announceSeq);
+      }
+      display.print(tmp);
+#endif
     } else if (_page == HomePage::ADVERT) {
       display.setColor(DisplayDriver::GREEN);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
@@ -414,6 +471,17 @@ public:
   }
 
   bool handleInput(char c) override {
+#ifdef WITH_BLEEDGE_BRIDGE
+    if (c == KEY_PREV && _page == HomePage::BLEEDGE) {
+      _task->notify(UIEventType::ack);
+      if (the_mesh.sendBLEEdgeAdvert()) {
+        _task->showAlert("BLEEdge advert sent!", 1000);
+      } else {
+        _task->showAlert("BLEEdge not connected", 1000);
+      }
+      return true;
+    }
+#endif
     if (c == KEY_LEFT || c == KEY_PREV) {
       _page = (_page + HomePage::Count - 1) % HomePage::Count;
       return true;
@@ -433,6 +501,16 @@ public:
       }
       return true;
     }
+#ifdef WITH_BLEEDGE_BRIDGE
+    if (c == KEY_ENTER && _page == HomePage::BLEEDGE) {
+      BLEEdgeBridgeStatus status;
+      the_mesh.getBLEEdgeStatus(status);
+      bool running = the_mesh.setBLEEdgeEnabled(!status.running);
+      _task->notify(UIEventType::ack);
+      _task->showAlert(running ? "BLEEdge enabled" : "BLEEdge disabled", 1000);
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::ADVERT) {
       _task->notify(UIEventType::ack);
       if (the_mesh.advert()) {
@@ -872,7 +950,7 @@ char UITask::handleLongPress(char c) {
 
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double-click triggered");
-  checkDisplayOn(c);
+  c = checkDisplayOn(c);
   return c;
 }
 

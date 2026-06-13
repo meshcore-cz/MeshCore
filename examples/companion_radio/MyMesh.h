@@ -34,6 +34,10 @@
 #include <helpers/StaticPoolPacketManager.h>
 #include <target.h>
 
+#ifdef WITH_BLEEDGE_BRIDGE
+#include <helpers/bleedge/BLEEdgeBridge.h>
+#endif
+
 /* ---------------------------------- CONFIGURATION ------------------------------------- */
 
 #ifndef LORA_FREQ
@@ -94,6 +98,11 @@ public:
   const char *getNodeName();
   NodePrefs *getNodePrefs();
   uint32_t getBLEPin();
+#ifdef WITH_BLEEDGE_BRIDGE
+  void getBLEEdgeStatus(BLEEdgeBridgeStatus& status) const;
+  bool setBLEEdgeEnabled(bool enabled);
+  bool sendBLEEdgeAdvert();
+#endif
 
   void loop();
   void handleCmdFrame(size_t len);
@@ -117,6 +126,8 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+  void logRx(mesh::Packet* pkt, int len, float score) override;
+  void logTx(mesh::Packet* pkt, int len) override;
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
   bool shouldOverwriteWhenFull() const override;
@@ -211,6 +222,9 @@ private:
   uint32_t pending_req;   // pending _BINARY_REQ
   BaseSerialInterface *_serial;
   AbstractUITask* _ui;
+#ifdef WITH_BLEEDGE_BRIDGE
+  BLEEdgeBridge bridge;
+#endif
 
   ContactsIterator _iter;
   uint32_t _iter_filter_since;

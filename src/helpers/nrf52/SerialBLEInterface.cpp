@@ -132,7 +132,12 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   // If we want to control BLE LED ourselves, uncomment this:
   // Bluefruit.autoConnLed(false);
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
+#ifdef WITH_BLEEDGE_BRIDGE
+  Bluefruit.configCentralBandwidth(BANDWIDTH_MAX);
+  Bluefruit.begin(1, 1);
+#else
   Bluefruit.begin();
+#endif
  
   char dev_name[32+16];
   if (strcmp(name, "@@MAC") == 0) {

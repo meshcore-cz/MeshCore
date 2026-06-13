@@ -281,7 +281,7 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
 }
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
-  if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
+  if (_serial && _serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;
     out_frame[i++] = PUSH_CODE_LOG_RX_DATA;
     out_frame[i++] = (int8_t)(snr * 4);
@@ -291,6 +291,21 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 
     _serial->writeFrame(out_frame, i);
   }
+}
+
+void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
+  (void)len;
+  (void)score;
+#ifdef WITH_BLEEDGE_BRIDGE
+  bridge.sendPacket(pkt);
+#endif
+}
+
+void MyMesh::logTx(mesh::Packet* pkt, int len) {
+  (void)len;
+#ifdef WITH_BLEEDGE_BRIDGE
+  bridge.sendPacket(pkt);
+#endif
 }
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -854,7 +869,11 @@ void MyMesh::onSendTimeout() {}
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
-      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
+      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui)
+#ifdef WITH_BLEEDGE_BRIDGE
+      , bridge(_mgr, &rtc, &self_id)
+#endif
+{
   _iter_started = false;
   _cli_rescue = false;
   offline_queue_len = 0;
@@ -966,6 +985,11 @@ void MyMesh::begin(bool has_display) {
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+
+#if defined(WITH_BLEEDGE_BRIDGE) && !defined(BLE_PIN_CODE)
+  bridge.setNodeName(_prefs.node_name);
+  bridge.begin();
+#endif
 }
 
 const char *MyMesh::getNodeName() {
@@ -977,6 +1001,26 @@ NodePrefs *MyMesh::getNodePrefs() {
 uint32_t MyMesh::getBLEPin() {
   return _active_ble_pin;
 }
+
+#ifdef WITH_BLEEDGE_BRIDGE
+void MyMesh::getBLEEdgeStatus(BLEEdgeBridgeStatus& status) const {
+  bridge.getStatus(status);
+}
+
+bool MyMesh::setBLEEdgeEnabled(bool enabled) {
+  if (enabled) {
+    bridge.setNodeName(_prefs.node_name);
+    bridge.begin();
+  } else {
+    bridge.end();
+  }
+  return bridge.isRunning();
+}
+
+bool MyMesh::sendBLEEdgeAdvert() {
+  return bridge.sendAnnounceNow();
+}
+#endif
 
 struct FreqRange {
   uint32_t lower_freq, upper_freq;
@@ -1003,6 +1047,11 @@ bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
 void MyMesh::startInterface(BaseSerialInterface &serial) {
   _serial = &serial;
   serial.enable();
+
+#if defined(WITH_BLEEDGE_BRIDGE) && defined(BLE_PIN_CODE)
+  bridge.setNodeName(_prefs.node_name);
+  bridge.begin();
+#endif
 }
 
 void MyMesh::handleCmdFrame(size_t len) {
@@ -1200,6 +1249,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
     memcpy(_prefs.node_name, &cmd_frame[1], nlen);
     _prefs.node_name[nlen] = 0; // null terminator
+#ifdef WITH_BLEEDGE_BRIDGE
+    bridge.setNodeName(_prefs.node_name);
+#endif
     savePrefs();
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_ADVERT_LATLON && len >= 9) {
@@ -2214,6 +2266,10 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+#ifdef WITH_BLEEDGE_BRIDGE
+  bridge.loop();
+#endif
+
   BaseChatMesh::loop();
 
   if (_cli_rescue) {

@@ -23,6 +23,11 @@
 #define WITH_BRIDGE
 #endif
 
+#ifdef WITH_BLEEDGE_BRIDGE
+#include "helpers/bleedge/BLEEdgeBridge.h"
+#define WITH_BRIDGE
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/ClientACL.h>
@@ -117,6 +122,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
   ESPNowBridge bridge;
+#elif defined(WITH_BLEEDGE_BRIDGE)
+  BLEEdgeBridge bridge;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
@@ -231,6 +238,9 @@ public:
     if (enable == bridge.isRunning()) return;
     if (enable)
     {
+    #if defined(WITH_BLEEDGE_BRIDGE)
+      bridge.setNodeName(_prefs.node_name);
+    #endif
       bridge.begin();
     }
     else 
