@@ -1,4 +1,7 @@
 #include "SensorMesh.h"
+#ifdef MESHCORE_CZ_REGION_PRESET
+#include <helpers/CzRegionPreset.h>
+#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -708,7 +711,14 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
+#ifdef DEFAULT_AIRTIME_FACTOR
+  _prefs.airtime_factor = DEFAULT_AIRTIME_FACTOR;
+#else
   _prefs.airtime_factor = 1.0;
+#endif
+#ifdef DEFAULT_PATH_HASH_MODE
+  _prefs.path_hash_mode = DEFAULT_PATH_HASH_MODE;
+#endif
   _prefs.rx_delay_base =   0.0f;  // turn off by default, was 10.0;
   _prefs.tx_delay_factor = 0.5f;   // was 0.25f
   _prefs.direct_tx_delay_factor = 0.2f; // was zero
@@ -742,7 +752,13 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   _cli.loadPrefs(_fs);
 
   acl.load(_fs, self_id);
-  region_map.load(_fs);
+  bool regions_loaded = region_map.load(_fs);
+#ifdef MESHCORE_CZ_REGION_PRESET
+  if (!regions_loaded) {
+    bootstrapCzRegions(region_map);
+    region_map.save(_fs);
+  }
+#endif
 
   // establish default-scope
   {
