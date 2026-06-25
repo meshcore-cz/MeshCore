@@ -19,6 +19,39 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
+// Parse an unsigned 16-bit value in decimal or with a 0x hexadecimal prefix.
+static bool parseUInt16(const char* text, uint16_t* value) {
+  if (text == nullptr || value == nullptr || *text == 0) return false;
+
+  uint8_t base = 10;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+    text += 2;
+    if (*text == 0) return false;
+  }
+
+  uint32_t result = 0;
+  while (*text) {
+    uint8_t digit;
+    if (*text >= '0' && *text <= '9') {
+      digit = *text - '0';
+    } else if (*text >= 'a' && *text <= 'f') {
+      digit = *text - 'a' + 10;
+    } else if (*text >= 'A' && *text <= 'F') {
+      digit = *text - 'A' + 10;
+    } else {
+      return false;
+    }
+    if (digit >= base) return false;
+    result = result * base + digit;
+    if (result > 0xFFFFu) return false;
+    text++;
+  }
+
+  *value = (uint16_t)result;
+  return true;
+}
+
 static bool isValidName(const char *n) {
   while (*n) {
     if (*n == '[' || *n == ']' || *n == '\\' || *n == ':' || *n == ',' || *n == '?' || *n == '*') return false;
@@ -91,7 +124,16 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
     file.read((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));   // 291
     file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));       // 292
-    // next: 293
+
+    // Keep the initialized defaults when loading an older 293-byte prefs file.
+    uint16_t advert_feat1 = _prefs->advert_feat1;
+    uint16_t advert_feat2 = _prefs->advert_feat2;
+    if (file.read((uint8_t *)&advert_feat1, sizeof(advert_feat1)) == sizeof(advert_feat1) &&
+        file.read((uint8_t *)&advert_feat2, sizeof(advert_feat2)) == sizeof(advert_feat2)) {
+      _prefs->advert_feat1 = advert_feat1; // 293
+      _prefs->advert_feat2 = advert_feat2; // 295
+    }
+    // next: 297
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -184,7 +226,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
     file.write((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));   // 291
     file.write((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));       // 292
-    // next: 293
+    file.write((uint8_t *)&_prefs->advert_feat1, sizeof(_prefs->advert_feat1)); // 293
+    file.write((uint8_t *)&_prefs->advert_feat2, sizeof(_prefs->advert_feat2)); // 295
+    // next: 297
 
     file.close();
   }
@@ -202,12 +246,18 @@ void CommonCLI::savePrefs() {
 uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
   if (_prefs->advert_loc_policy == ADVERT_LOC_NONE) {
     AdvertDataBuilder builder(node_type, _prefs->node_name);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   } else if (_prefs->advert_loc_policy == ADVERT_LOC_SHARE) {
     AdvertDataBuilder builder(node_type, _prefs->node_name, _sensors->node_lat, _sensors->node_lon);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   } else {
     AdvertDataBuilder builder(node_type, _prefs->node_name, _prefs->node_lat, _prefs->node_lon);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   }
 }
@@ -532,6 +582,25 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       savePrefs();
       strcpy(reply, "OK");
     }
+  } else if (memcmp(config, "advert.features ", 16) == 0) {
+    strcpy(tmp, &config[16]);
+    const char *parts[2];
+    int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
+    uint16_t feat1;
+    uint16_t feat2;
+
+    if (num != 2 || !parseUInt16(parts[0], &feat1) || !parseUInt16(parts[1], &feat2)) {
+      strcpy(reply, "Error: set advert.features <feat1> <feat2>");
+    } else if (feat1 == 0 && feat2 != 0) {
+      strcpy(reply, "Error: feat1 is required when feat2 is set");
+    } else {
+      _prefs->advert_feat1 = feat1;
+      _prefs->advert_feat2 = feat2;
+      savePrefs();
+      sprintf(reply, "OK feat1=0x%04X feat2=0x%04X",
+              (unsigned int)_prefs->advert_feat1,
+              (unsigned int)_prefs->advert_feat2);
+    }
   } else if (memcmp(config, "guest.password ", 15) == 0) {
     StrHelper::strncpy(_prefs->guest_password, &config[15], sizeof(_prefs->guest_password));
     savePrefs();
@@ -786,6 +855,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %d", ((uint32_t) _prefs->flood_advert_interval));
   } else if (memcmp(config, "advert.interval", 15) == 0) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->advert_interval) * 2);
+  } else if (memcmp(config, "advert.features", 15) == 0) {
+    sprintf(reply, "> feat1=0x%04X feat2=0x%04X",
+            (unsigned int)_prefs->advert_feat1,
+            (unsigned int)_prefs->advert_feat2);
   } else if (memcmp(config, "guest.password", 14) == 0) {
     sprintf(reply, "> %s", _prefs->guest_password);
   } else if (sender_timestamp == 0 && memcmp(config, "prv.key", 7) == 0) {  // from serial command line only
