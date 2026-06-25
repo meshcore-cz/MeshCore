@@ -63,6 +63,12 @@ struct NodePrefs { // persisted to file
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+  // CZ: optional advert FEAT1/FEAT2 values. Runtime state only — these are NOT
+  // part of the shared prefs blob above; they are persisted separately in
+  // /cz_advert (see loadCzPrefs/saveCzPrefs) so upstream prefs-format changes
+  // can never collide with or corrupt them.
+  uint16_t advert_feat1;
+  uint16_t advert_feat2;
 };
 
 class CommonCLICallbacks {
@@ -127,6 +133,10 @@ class CommonCLI {
   mesh::RTCClock* getRTCClock() { return _rtc; }
   void savePrefs();
   void loadPrefsInt(FILESYSTEM* _fs, const char* filename);
+
+  // CZ: advert feature metadata persisted in a separate, versioned sidecar file
+  void loadCzPrefs(FILESYSTEM* fs);
+  void saveCzPrefs(FILESYSTEM* fs);
 
   void handleRegionCmd(char* command, char* reply);
   void handleGetCmd(uint32_t sender_timestamp, char* command, char* reply);

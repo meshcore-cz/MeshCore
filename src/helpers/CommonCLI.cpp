@@ -19,6 +19,39 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
+// Parse an unsigned 16-bit value in decimal or with a 0x hexadecimal prefix.
+static bool parseUInt16(const char* text, uint16_t* value) {
+  if (text == nullptr || value == nullptr || *text == 0) return false;
+
+  uint8_t base = 10;
+  if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    base = 16;
+    text += 2;
+    if (*text == 0) return false;
+  }
+
+  uint32_t result = 0;
+  while (*text) {
+    uint8_t digit;
+    if (*text >= '0' && *text <= '9') {
+      digit = *text - '0';
+    } else if (*text >= 'a' && *text <= 'f') {
+      digit = *text - 'a' + 10;
+    } else if (*text >= 'A' && *text <= 'F') {
+      digit = *text - 'A' + 10;
+    } else {
+      return false;
+    }
+    if (digit >= base) return false;
+    result = result * base + digit;
+    if (result > 0xFFFFu) return false;
+    text++;
+  }
+
+  *value = (uint16_t)result;
+  return true;
+}
+
 static bool isValidName(const char *n) {
   while (*n) {
     if (*n == '[' || *n == ']' || *n == '\\' || *n == ':' || *n == ',' || *n == '?' || *n == '*') return false;
@@ -35,6 +68,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
     savePrefs(fs);  // save to new filename
     fs->remove("/node_prefs");  // remove old
   }
+  loadCzPrefs(fs);  // CZ: advert feature metadata sidecar
 }
 
 void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
@@ -188,6 +222,57 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
 
     file.close();
   }
+  saveCzPrefs(fs);  // CZ: persist advert feature metadata sidecar
+}
+
+// CZ: advert feature metadata is stored in its own versioned file rather than
+// appended to the shared prefs blob above. This keeps it immune to upstream
+// prefs-format changes — a magic/version mismatch falls back to defaults
+// instead of misreading whatever upstream happens to add next.
+#define CZ_ADVERT_FILE     "/cz_advert"
+#define CZ_ADVERT_MAGIC    0x46415A43ul   // 'C','Z','A','F'
+#define CZ_ADVERT_VERSION  1
+
+void CommonCLI::loadCzPrefs(FILESYSTEM* fs) {
+  if (!fs->exists(CZ_ADVERT_FILE)) return;
+#if defined(RP2040_PLATFORM)
+  File file = fs->open(CZ_ADVERT_FILE, "r");
+#else
+  File file = fs->open(CZ_ADVERT_FILE);
+#endif
+  if (file) {
+    uint32_t magic = 0;
+    uint8_t version = 0;
+    uint16_t feat1 = 0, feat2 = 0;
+    if (file.read((uint8_t *)&magic, sizeof(magic)) == sizeof(magic) && magic == CZ_ADVERT_MAGIC &&
+        file.read((uint8_t *)&version, sizeof(version)) == sizeof(version) && version == CZ_ADVERT_VERSION &&
+        file.read((uint8_t *)&feat1, sizeof(feat1)) == sizeof(feat1) &&
+        file.read((uint8_t *)&feat2, sizeof(feat2)) == sizeof(feat2)) {
+      _prefs->advert_feat1 = feat1;
+      _prefs->advert_feat2 = feat2;
+    }
+    file.close();
+  }
+}
+
+void CommonCLI::saveCzPrefs(FILESYSTEM* fs) {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  fs->remove(CZ_ADVERT_FILE);
+  File file = fs->open(CZ_ADVERT_FILE, FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+  File file = fs->open(CZ_ADVERT_FILE, "w");
+#else
+  File file = fs->open(CZ_ADVERT_FILE, "w", true);
+#endif
+  if (file) {
+    uint32_t magic = CZ_ADVERT_MAGIC;
+    uint8_t version = CZ_ADVERT_VERSION;
+    file.write((uint8_t *)&magic, sizeof(magic));
+    file.write((uint8_t *)&version, sizeof(version));
+    file.write((uint8_t *)&_prefs->advert_feat1, sizeof(_prefs->advert_feat1));
+    file.write((uint8_t *)&_prefs->advert_feat2, sizeof(_prefs->advert_feat2));
+    file.close();
+  }
 }
 
 #define MIN_LOCAL_ADVERT_INTERVAL   60
@@ -202,12 +287,18 @@ void CommonCLI::savePrefs() {
 uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
   if (_prefs->advert_loc_policy == ADVERT_LOC_NONE) {
     AdvertDataBuilder builder(node_type, _prefs->node_name);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   } else if (_prefs->advert_loc_policy == ADVERT_LOC_SHARE) {
     AdvertDataBuilder builder(node_type, _prefs->node_name, _sensors->node_lat, _sensors->node_lon);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   } else {
     AdvertDataBuilder builder(node_type, _prefs->node_name, _prefs->node_lat, _prefs->node_lon);
+    builder.setFeat1(_prefs->advert_feat1);
+    builder.setFeat2(_prefs->advert_feat2);
     return builder.encodeTo(app_data);
   }
 }
@@ -532,6 +623,25 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       savePrefs();
       strcpy(reply, "OK");
     }
+  } else if (memcmp(config, "advert.features ", 16) == 0) {
+    strcpy(tmp, &config[16]);
+    const char *parts[2];
+    int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
+    uint16_t feat1;
+    uint16_t feat2;
+
+    if (num != 2 || !parseUInt16(parts[0], &feat1) || !parseUInt16(parts[1], &feat2)) {
+      strcpy(reply, "Error: set advert.features <feat1> <feat2>");
+    } else if (feat1 == 0 && feat2 != 0) {
+      strcpy(reply, "Error: feat1 is required when feat2 is set");
+    } else {
+      _prefs->advert_feat1 = feat1;
+      _prefs->advert_feat2 = feat2;
+      savePrefs();
+      sprintf(reply, "OK feat1=0x%04X feat2=0x%04X",
+              (unsigned int)_prefs->advert_feat1,
+              (unsigned int)_prefs->advert_feat2);
+    }
   } else if (memcmp(config, "guest.password ", 15) == 0) {
     StrHelper::strncpy(_prefs->guest_password, &config[15], sizeof(_prefs->guest_password));
     savePrefs();
@@ -786,6 +896,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %d", ((uint32_t) _prefs->flood_advert_interval));
   } else if (memcmp(config, "advert.interval", 15) == 0) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->advert_interval) * 2);
+  } else if (memcmp(config, "advert.features", 15) == 0) {
+    sprintf(reply, "> feat1=0x%04X feat2=0x%04X",
+            (unsigned int)_prefs->advert_feat1,
+            (unsigned int)_prefs->advert_feat2);
   } else if (memcmp(config, "guest.password", 14) == 0) {
     sprintf(reply, "> %s", _prefs->guest_password);
   } else if (sender_timestamp == 0 && memcmp(config, "prv.key", 7) == 0) {  // from serial command line only
