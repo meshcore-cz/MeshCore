@@ -91,23 +91,33 @@ Kraje: `cz-pha`, `cz-stc`, `cz-jhc`, `cz-plz`, `cz-kvk`, `cz-ulk`, `cz-lbk`, `cz
 
 Preferovaný flood scope je `*, cz` (nescopované zprávy a provoz se scope `cz`). Krajské regiony jsou definované, ale neforwardují se, dokud je výslovně nepovolíte.
 
-### Volitelný domovský kraj (subregion)
+## Rozšířená advert metadata
 
-Kraj lze nastavit při buildu — tím se pro daný region povolí flood a region se použije jako domovský:
+Repeater může v advertu vysílat dvě 16bitová pole se schopnostmi zařízení (`feat1` a `feat2`). `feat1` je identifikátor schématu, `feat2` je bitová maska schopností (např. solární napájení, záložní baterie, připojení k internetu, brána, typ antény). Hodnoty se zadávají desítkově nebo v hexu s prefixem `0x` a ukládají se do samostatného souboru `/cz_advert` (vlastní magic + verze), takže nehrozí kolize s formátem sdílených NodePrefs.
 
-```ini
--D MESHCORE_CZ_SUBREGION=\"cz-ulk\"
+Hodnoty nastavíte přes Remote Admin CLI:
+
+```
+set advert.features <feat1> <feat2>
 ```
 
-Přidejte do `variants/*/platformio.ini` nebo do lokálního `platformio.local.ini` (gitignored), například:
+Aktuální nastavení zjistíte příkazem:
 
-```ini
-[env:SenseCap_Solar_repeater]
-build_flags =
-  -D MESHCORE_CZ_SUBREGION=\"cz-ulk\"
+```
+get advert.features
 ```
 
-Zařízení, která už mají soubor `/regions2`, si ponechají uloženou konfiguraci; pro uplatnění presetů přeflashujte nebo upravte regiony přes CLI.
+Hodnoty `feat1` a `feat2` si pohodlně sestavíte v online generátoru, který zaškrtnutí jednotlivých schopností převede na výsledný příkaz:
+
+**https://meshcore-cz.github.io/meshcore-metadata-advert-generator/**
+
+Příklad — pro `feat1 = 0x4E01` a `feat2 = 0x0060` (zapnuté bity 5 a 6) generátor vytvoří příkaz:
+
+```
+set advert.features 0x4E01 0x0060
+```
+
+Poznámka: `feat1` je povinný, pokud nastavujete `feat2`.
 
 ## Sestavení (build)
 
